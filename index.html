@@ -102,7 +102,7 @@ const defaultSet = (t) => {
   if (t==='Run' || t==='Cardio Intervals') return {distance:'',time:'',unit:'mi',pr:false};
   return {reps:'',weight:'',unit:'lbs',pr:false};
 };
-const newExercise = () => ({id: Date.now()+Math.random(), name:'', type:'Weights', sets:[defaultSet('Weights')]});
+const newExercise = () => ({id: String(Date.now()+Math.random()).replace('.',''), name:'', type:'Weights', sets:[defaultSet('Weights')]});
 const PRB = () => '<span class="pr-badge">PR</span>';
 
 // ── State ────────────────────────────────────────────────────
@@ -118,36 +118,93 @@ let S = {
   expanded: {}
 };
 
-function setState(patch) {
+// ── Render control ───────────────────────────────────────────
+// Only do a full re-render when no text input is focused.
+// For text fields we update state silently; the value is read from the DOM on save.
+function setState(patch, forceRender) {
   Object.assign(S, typeof patch === 'function' ? patch(S) : patch);
-  render();
+  const active = document.activeElement;
+  const isTyping = active && (active.tagName==='INPUT' || active.tagName==='TEXTAREA') && active.type!=='checkbox' && active.type!=='date';
+  if (forceRender || !isTyping) render();
+}
+
+// Read all live text values from the DOM into state before any action that needs them
+function syncFromDOM() {
+  // Workout name & notes
+  const wn = document.getElementById('workout-name-input');
+  if (wn) S.workoutName = wn.value;
+  const nt = document.getElementById('notes-input');
+  if (nt) S.notes = nt.value;
+  // Exercise names & set fields
+  S.exercises.forEach(ex => {
+    const nameEl = document.getElementById('exname-'+ex.id);
+    if (nameEl) ex.name = nameEl.value;
+    ex.sets.forEach((set, si) => {
+      ['reps','weight','distance','time'].forEach(f => {
+        const el = document.getElementById(`set-${ex.id}-${si}-${f}`);
+        if (el) set[f] = el.value;
+      });
+    });
+  });
 }
 
 // ── Actions ──────────────────────────────────────────────────
 function saveWorkout() {
+  syncFromDOM();
   const prs  = S.exercises.reduce((a,e) => a + e.sets.filter(s=>s.pr).length, 0);
   const sets = S.exercises.reduce((a,e) => a + e.sets.length, 0);
   const entry = { id:Date.now(), date:S.date, name:S.workoutName||'Workout', exercises:S.exercises.filter(e=>e.name.trim()), notes:S.notes, prs, sets };
   const h = [entry, ...S.history];
   Store.save(h);
   Store.setLastBackup(new Date().toISOString());
-  setState({ history:h, saved:true });
-  setTimeout(() => setState({saved:false}), 2500);
+  S.history = h;
+  S.saved = true;
+  render();
+  setTimeout(() => { S.saved=false; render(); }, 2500);
 }
 
-function resetForm() { setState({ exercises:[newExercise()], workoutName:'', notes:'', date:todayStr() }); }
-function addExercise() { setState(s => ({ exercises:[...s.exercises, newExercise()] })); }
-function removeExercise(id) { setState(s => ({ exercises:s.exercises.filter(e=>e.id!=id) })); }
-function updateExercise(id,f,v) { setState(s => ({ exercises:s.exercises.map(e=>e.id==id?{...e,[f]:v}:e) })); }
-function changeType(id,t) { setState(s => ({ exercises:s.exercises.map(e=>e.id==id?{...e,type:t,sets:[defaultSet(t)]}:e) })); }
-function addSet(id) { setState(s => ({ exercises:s.exercises.map(e=>e.id==id?{...e,sets:[...e.sets,defaultSet(e.type)]}:e) })); }
-function removeSet(id,si) { setState(s => ({ exercises:s.exercises.map(e=>e.id==id?{...e,sets:e.sets.filter((_,i)=>i!=si)}:e) })); }
-function updateSet(id,si,f,v) { setState(s => ({ exercises:s.exercises.map(e=>e.id==id?{...e,sets:e.sets.map((set,i)=>i==si?{...set,[f]:v}:set)}:e) })); }
-function toggleExpanded(k) { setState(s => ({ expanded:{...s.expanded,[k]:!s.expanded[k]} })); }
-function setView(v) { setState({ view:v, viewingEntry: v!=='log' ? null : S.viewingEntry }); }
-function viewEntry(id) { const e=S.history.find(h=>h.id==id); if(e) setState({viewingEntry:e,view:'log'}); }
+function resetForm() { S.exercises=[newExercise()]; S.workoutName=''; S.notes=''; S.date=todayStr(); render(); }
+
+function addExercise() { syncFromDOM(); S.exercises.push(newExercise()); render(); }
+
+function removeExercise(id) { syncFromDOM(); S.exercises=S.exercises.filter(e=>e.id!=id); render(); }
+
+function changeType(id,t) {
+  syncFromDOM();
+  S.exercises = S.exercises.map(e => e.id==id ? {...e, type:t, sets:[defaultSet(t)]} : e);
+  render();
+}
+
+function addSet(id) {
+  syncFromDOM();
+  S.exercises = S.exercises.map(e => e.id==id ? {...e, sets:[...e.sets, defaultSet(e.type)]} : e);
+  render();
+}
+
+function removeSet(id,si) {
+  syncFromDOM();
+  S.exercises = S.exercises.map(e => e.id==id ? {...e, sets:e.sets.filter((_,i)=>i!=si)} : e);
+  render();
+}
+
+function updateSetField(id,si,f,v) {
+  // Update state silently — no re-render so input keeps focus
+  const ex = S.exercises.find(e=>e.id==id);
+  if (ex && ex.sets[si]) ex.sets[si][f] = v;
+}
+
+function updateSetCheck(id,si,v) {
+  syncFromDOM();
+  S.exercises = S.exercises.map(e => e.id==id ? {...e, sets:e.sets.map((set,i)=>i==si?{...set,pr:v}:set)} : e);
+  render();
+}
+
+function toggleExpanded(k) { S.expanded[k]=!S.expanded[k]; render(); }
+function setView(v) { syncFromDOM(); S.view=v; if(v!=='log') S.viewingEntry=null; render(); }
+function viewEntry(id) { const e=S.history.find(h=>h.id==id); if(e){S.viewingEntry=e; S.view='log'; render();} }
 
 function exportData() {
+  syncFromDOM();
   const b = new Blob([JSON.stringify(S.history,null,2)], {type:'application/json'});
   const a = document.createElement('a'); a.href=URL.createObjectURL(b); a.download=`iworkout-${todayStr()}.json`; a.click();
 }
@@ -155,7 +212,7 @@ function triggerImport() { document.getElementById('import-input').click(); }
 function importData() {
   const f = document.getElementById('import-input').files[0]; if (!f) return;
   const r = new FileReader();
-  r.onload = e => { try { const d=JSON.parse(e.target.result); if(Array.isArray(d)){ Store.save(d); setState({history:d}); alert('Imported '+d.length+' workout'+(d.length!=1?'s':'')); } else { alert('Invalid file.'); } } catch { alert('Could not read file.'); } };
+  r.onload = e => { try { const d=JSON.parse(e.target.result); if(Array.isArray(d)){ Store.save(d); S.history=d; render(); alert('Imported '+d.length+' workout'+(d.length!=1?'s':'')); } else { alert('Invalid file.'); } } catch { alert('Could not read file.'); } };
   r.readAsText(f);
 }
 
@@ -165,15 +222,12 @@ function knownNames() {
   S.history.forEach(s => s.exercises.forEach(e => { if (e.name && !names.includes(e.name)) names.push(e.name); }));
   return names;
 }
-function acInput(id, val) {
-  updateExercise(id, 'name', val);
-  showAC(id, val);
-}
-function showAC(id, val) {
-  const el = document.getElementById('ac-'+id);
-  if (!el) return;
-  const q = (val||'').trim().toLowerCase();
-  const matches = q.length === 0 ? [] : knownNames().filter(n => n.toLowerCase().includes(q) && n.toLowerCase() !== q);
+function showAC(id) {
+  const inp = document.getElementById('exname-'+id);
+  const el  = document.getElementById('ac-'+id);
+  if (!inp||!el) return;
+  const q = inp.value.trim().toLowerCase();
+  const matches = q.length===0 ? [] : knownNames().filter(n => n.toLowerCase().includes(q) && n.toLowerCase()!==q);
   if (!matches.length) { el.style.display='none'; return; }
   el.innerHTML = matches.map(m =>
     `<div class="ac-item" onmousedown="pickAC(event,'${id}','${m.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}')">`+
@@ -181,8 +235,16 @@ function showAC(id, val) {
   ).join('');
   el.style.display = 'block';
 }
-function hideAC(id) { setTimeout(() => { const el=document.getElementById('ac-'+id); if(el) el.style.display='none'; }, 150); }
-function pickAC(e, id, val) { e.preventDefault(); updateExercise(id,'name',val); const el=document.getElementById('ac-'+id); if(el) el.style.display='none'; }
+function hideAC(id) { setTimeout(()=>{ const el=document.getElementById('ac-'+id); if(el) el.style.display='none'; }, 150); }
+function pickAC(e, id, val) {
+  e.preventDefault();
+  const inp = document.getElementById('exname-'+id);
+  if (inp) inp.value = val;
+  const ex = S.exercises.find(x=>x.id==id);
+  if (ex) ex.name = val;
+  const el = document.getElementById('ac-'+id);
+  if (el) el.style.display='none';
+}
 
 // ── Render: Log Tab ───────────────────────────────────────────
 function renderLog() {
@@ -193,15 +255,15 @@ function renderLog() {
   const chips = [
     `<span class="chip" style="color:#a3e635">${S.exercises.filter(e=>e.name).length} exercises</span>`,
     `<span class="chip" style="color:#6b7565">${totalSets} sets</span>`,
-    ...(totalPRs>0 ? [`<span class="chip" style="color:#ff9f1c">🔥 ${totalPRs} PR${totalPRs>1?'s':''}</span>`] : [])
+    ...(totalPRs>0?[`<span class="chip" style="color:#ff9f1c">🔥 ${totalPRs} PR${totalPRs>1?'s':''}</span>`]:[])
   ].join('');
 
   const exCards = S.exercises.map((ex, ei) => {
-    const isW = ex.type==='Weights' || ex.type==='WOD';
+    const isW = ex.type==='Weights'||ex.type==='WOD';
     const isR = ex.type==='Run';
     const isI = ex.type==='Cardio Intervals';
     const rl  = isI ? 'interval' : 'set';
-    const rmvBtn = S.exercises.length > 1
+    const rmvBtn = S.exercises.length>1
       ? `<div style="padding-top:19px"><button class="btn-remove" onclick="removeExercise('${ex.id}')">✕</button></div>` : '';
 
     const setBlocks = ex.sets.map((set, si) => {
@@ -209,20 +271,20 @@ function renderLog() {
       let fields = '';
       if (isW) {
         fields = `<div class="grid-2">
-          <div><div class="col-label">REPS</div><input class="input-field" inputmode="numeric" placeholder="10" value="${esc(set.reps)}" oninput="updateSet('${ex.id}',${si},'reps',this.value)" style="text-align:center"/></div>
-          <div><div class="col-label">WEIGHT</div><input class="input-field" inputmode="decimal" placeholder="135" value="${esc(set.weight)}" oninput="updateSet('${ex.id}',${si},'weight',this.value)" style="text-align:center"/></div>
+          <div><div class="col-label">REPS</div><input id="set-${ex.id}-${si}-reps" class="input-field" inputmode="numeric" placeholder="10" value="${esc(set.reps)}" oninput="updateSetField('${ex.id}',${si},'reps',this.value)" style="text-align:center"/></div>
+          <div><div class="col-label">WEIGHT</div><input id="set-${ex.id}-${si}-weight" class="input-field" inputmode="decimal" placeholder="135" value="${esc(set.weight)}" oninput="updateSetField('${ex.id}',${si},'weight',this.value)" style="text-align:center"/></div>
           <div style="grid-column:1/-1"><div class="unit-toggle">
-            <button class="unit-btn ${set.unit==='lbs'?'active':''}" onclick="updateSet('${ex.id}',${si},'unit','lbs')">lbs</button>
-            <button class="unit-btn ${set.unit==='kg'?'active':''}" onclick="updateSet('${ex.id}',${si},'unit','kg')">kg</button>
+            <button class="unit-btn ${set.unit==='lbs'?'active':''}" onclick="syncFromDOM();S.exercises.find(e=>e.id=='${ex.id}').sets[${si}].unit='lbs';render()">lbs</button>
+            <button class="unit-btn ${set.unit==='kg'?'active':''}" onclick="syncFromDOM();S.exercises.find(e=>e.id=='${ex.id}').sets[${si}].unit='kg';render()">kg</button>
           </div></div>
         </div>`;
       } else {
         fields = `<div class="grid-2">
-          <div><div class="col-label">DISTANCE</div><input class="input-field" inputmode="decimal" placeholder="${isR?'3.1':'0.25'}" value="${esc(set.distance)}" oninput="updateSet('${ex.id}',${si},'distance',this.value)" style="text-align:center"/></div>
-          <div><div class="col-label">${isR?'TOTAL TIME':'TIME'}</div><input class="input-field" placeholder="${isR?'28:30':'1:30'}" value="${esc(set.time)}" oninput="updateSet('${ex.id}',${si},'time',this.value)" style="text-align:center"/></div>
+          <div><div class="col-label">DISTANCE</div><input id="set-${ex.id}-${si}-distance" class="input-field" inputmode="decimal" placeholder="${isR?'3.1':'0.25'}" value="${esc(set.distance)}" oninput="updateSetField('${ex.id}',${si},'distance',this.value)" style="text-align:center"/></div>
+          <div><div class="col-label">${isR?'TOTAL TIME':'TIME'}</div><input id="set-${ex.id}-${si}-time" class="input-field" placeholder="${isR?'28:30':'1:30'}" value="${esc(set.time)}" oninput="updateSetField('${ex.id}',${si},'time',this.value)" style="text-align:center"/></div>
           <div style="grid-column:1/-1"><div class="unit-toggle">
-            <button class="unit-btn ${set.unit==='mi'?'active':''}" onclick="updateSet('${ex.id}',${si},'unit','mi')">mi</button>
-            <button class="unit-btn ${set.unit==='km'?'active':''}" onclick="updateSet('${ex.id}',${si},'unit','km')">km</button>
+            <button class="unit-btn ${set.unit==='mi'?'active':''}" onclick="syncFromDOM();S.exercises.find(e=>e.id=='${ex.id}').sets[${si}].unit='mi';render()">mi</button>
+            <button class="unit-btn ${set.unit==='km'?'active':''}" onclick="syncFromDOM();S.exercises.find(e=>e.id=='${ex.id}').sets[${si}].unit='km';render()">km</button>
           </div></div>
         </div>`;
       }
@@ -230,7 +292,7 @@ function renderLog() {
         <div class="set-block-header">
           <span style="font-size:11px;color:#4a5044;letter-spacing:.08em;text-transform:uppercase">${rl} ${si+1}</span>
           <div class="flex-row" style="gap:10px">
-            <div class="flex-row" style="gap:6px"><span style="font-size:10px;color:#ff6b2b;letter-spacing:.08em">PR</span><input type="checkbox" class="pr-checkbox" ${set.pr?'checked':''} onchange="updateSet('${ex.id}',${si},'pr',this.checked)"/></div>
+            <div class="flex-row" style="gap:6px"><span style="font-size:10px;color:#ff6b2b;letter-spacing:.08em">PR</span><input type="checkbox" class="pr-checkbox" ${set.pr?'checked':''} onchange="updateSetCheck('${ex.id}',${si},this.checked)"/></div>
             ${rmvSet}
           </div>
         </div>
@@ -238,7 +300,7 @@ function renderLog() {
       </div>`;
     }).join('');
 
-    const prTags = ex.sets.map((s,si) => s.pr
+    const prTags = ex.sets.map((s,si)=>s.pr
       ? `<div class="flex-row" style="gap:5px"><span style="font-size:11px;color:#4a5044">${rl.charAt(0).toUpperCase()+rl.slice(1)} ${si+1}</span>${PRB()}</div>` : ''
     ).join('');
 
@@ -247,10 +309,10 @@ function renderLog() {
         <div style="flex:1">
           <div class="col-label">EXERCISE ${ei+1}</div>
           <div class="ac-wrap">
-            <input class="input-field" autocomplete="off" placeholder="e.g. Bench Press, Morning Run…"
+            <input id="exname-${ex.id}" class="input-field" autocomplete="off" placeholder="e.g. Bench Press, Morning Run…"
               value="${esc(ex.name)}"
-              oninput="acInput('${ex.id}',this.value)"
-              onfocus="showAC('${ex.id}',this.value)"
+              oninput="S.exercises.find(e=>e.id=='${ex.id}').name=this.value;showAC('${ex.id}')"
+              onfocus="showAC('${ex.id}')"
               onblur="hideAC('${ex.id}')"
             />
             <div id="ac-${ex.id}" class="ac-dropdown"></div>
@@ -268,20 +330,20 @@ function renderLog() {
         </select>
       </div>
       ${setBlocks}
-      ${prTags ? `<div class="flex-row" style="flex-wrap:wrap;gap:6px;margin-top:10px">${prTags}</div>` : ''}
+      ${prTags?`<div class="flex-row" style="flex-wrap:wrap;gap:6px;margin-top:10px">${prTags}</div>`:''}
       <button class="btn-ghost" style="margin-top:12px;width:100%;font-size:13px" onclick="addSet('${ex.id}')">+ add ${rl}</button>
     </div>`;
   }).join('');
 
   return `
     <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:20px">
-      <div><div class="col-label">WORKOUT NAME</div><input class="input-field" placeholder="e.g. Push Day A" value="${esc(S.workoutName)}" oninput="setState({workoutName:this.value})"/></div>
-      <div><div class="col-label">DATE</div><input type="date" class="input-field" value="${S.date}" onchange="setState({date:this.value})"/></div>
+      <div><div class="col-label">WORKOUT NAME</div><input id="workout-name-input" class="input-field" placeholder="e.g. Push Day A" value="${esc(S.workoutName)}"/></div>
+      <div><div class="col-label">DATE</div><input type="date" class="input-field" value="${S.date}" onchange="S.date=this.value"/></div>
     </div>
     <div class="flex-row" style="flex-wrap:wrap;gap:8px;margin-bottom:16px">${chips}</div>
     ${exCards}
     <button class="btn-ghost" style="width:100%;padding:15px;margin-bottom:16px;border-style:dashed;font-size:13px" onclick="addExercise()">+ add exercise</button>
-    <div style="margin-bottom:16px"><div class="col-label">NOTES</div><textarea class="input-field" rows="3" placeholder="How did it feel? Any observations…" oninput="setState({notes:this.value})">${esc(S.notes)}</textarea></div>
+    <div style="margin-bottom:16px"><div class="col-label">NOTES</div><textarea id="notes-input" class="input-field" rows="3" placeholder="How did it feel? Any observations…">${esc(S.notes)}</textarea></div>
     <div class="flex-row"><button class="btn-primary" onclick="saveWorkout()">SAVE WORKOUT</button><button class="btn-ghost" onclick="resetForm()">RESET</button></div>
   `;
 }
@@ -290,12 +352,12 @@ function renderLog() {
 function renderDetail() {
   const e = S.viewingEntry;
   const cards = e.exercises.map(ex => {
-    const isR = ex.type==='Run', isI = ex.type==='Cardio Intervals';
-    const rl = isI ? 'Interval' : 'Set';
-    const typeTag = ex.type && ex.type!=='Weights'
+    const isR=ex.type==='Run', isI=ex.type==='Cardio Intervals';
+    const rl = isI?'Interval':'Set';
+    const typeTag = ex.type&&ex.type!=='Weights'
       ? `<span style="font-size:10px;color:#3a4035;background:#131710;border:1px solid #1e2319;padding:3px 8px;border-radius:5px">${esc(ex.type)}</span>` : '';
-    const rows = ex.sets.map((s,si) => {
-      const d = (isR||isI) ? `${s.distance||'—'} ${s.unit} · ${s.time||'—'}` : `${s.reps||'—'} reps · ${s.weight||'—'} ${s.unit}`;
+    const rows = ex.sets.map((s,si)=>{
+      const d=(isR||isI)?`${s.distance||'—'} ${s.unit} · ${s.time||'—'}`:`${s.reps||'—'} reps · ${s.weight||'—'} ${s.unit}`;
       return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:${si<ex.sets.length-1?'1px solid #181d15':'none'}">
         <div><div style="font-size:10px;color:#3a4035;letter-spacing:.06em;margin-bottom:2px">${rl} ${si+1}</div><div style="font-size:14px;color:#c8c4b9">${esc(d)}</div></div>
         ${s.pr?PRB():''}
@@ -303,60 +365,55 @@ function renderDetail() {
     }).join('');
     return `<div class="exercise-card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-family:'Bebas Neue',sans-serif;font-size:16px;letter-spacing:.07em;color:#a3e635">${esc(ex.name)}</div>${typeTag}</div>${rows}</div>`;
   }).join('');
-  const notesB = e.notes ? `<div style="background:#111410;border:1px solid #1e2319;border-radius:12px;padding:14px 16px;margin-top:4px"><div class="col-label" style="margin-bottom:8px">NOTES</div><div style="font-size:13px;color:#6b7565;line-height:1.7;font-style:italic">${esc(e.notes)}</div></div>` : '';
+  const notesB = e.notes?`<div style="background:#111410;border:1px solid #1e2319;border-radius:12px;padding:14px 16px;margin-top:4px"><div class="col-label" style="margin-bottom:8px">NOTES</div><div style="font-size:13px;color:#6b7565;line-height:1.7;font-style:italic">${esc(e.notes)}</div></div>`:'';
   return `
     <div style="margin-bottom:20px">
-      <div style="font-family:'Bebas Neue',sans-serif;font-size:24px;color:#e8e4d9;line-height:1">${esc(e.name)}</div>
+      <div style="font-family:'Anton',sans-serif;font-size:24px;color:#e8e4d9;line-height:1">${esc(e.name)}</div>
       <div style="font-size:13px;color:#4a5044;margin-top:4px;display:flex;gap:12px;flex-wrap:wrap">
         <span>${e.date}</span><span>~${estimateCal(e.sets)} kcal</span>${e.prs>0?`<span style="color:#ff9f1c">🔥 ${e.prs} PR</span>`:''}
       </div>
     </div>
     ${cards}${notesB}
-    <div style="margin-top:20px"><button class="btn-ghost" style="width:100%" onclick="setState({viewingEntry:null,view:'history'})">← BACK TO HISTORY</button></div>
+    <div style="margin-top:20px"><button class="btn-ghost" style="width:100%" onclick="S.viewingEntry=null;S.view='history';render()">← BACK TO HISTORY</button></div>
   `;
 }
 
 // ── Render: History Tab ───────────────────────────────────────
 function renderHistory() {
-  const tSets = S.history.reduce((a,s)=>a+s.sets,0);
-  const tPRs  = S.history.reduce((a,s)=>a+s.prs,0);
-  const tCals = S.history.reduce((a,s)=>a+estimateCal(s.sets),0);
-  const tiles = [
-    {label:'WORKOUTS',      value:S.history.length,       accent:'#a3e635'},
-    {label:'EST. CALORIES', value:tCals.toLocaleString(), accent:'#ff9f1c', sub:'kcal burned'},
-    {label:'TOTAL SETS',    value:tSets,                  accent:'#6ee7b7'},
-    {label:'TOTAL PRs',     value:tPRs,                   accent:'#ff6b2b'}
-  ].map(t => `<div class="stat-tile"><div class="col-label" style="margin-bottom:6px">${t.label}</div><div style="font-family:'Bebas Neue',sans-serif;font-size:34px;color:${t.accent};line-height:1">${t.value}</div>${t.sub?`<div class="col-label" style="margin-top:3px">${t.sub}</div>`:''}</div>`).join('');
-
-  const cards = S.history.length === 0
-    ? `<div class="empty-state"><div class="empty-icon">🏋️</div><div class="empty-text">No workouts logged yet</div></div>`
-    : S.history.map(entry => {
-        const chips = entry.exercises.map(ex => `<span style="background:#0e120c;border:1px solid #1a1f17;border-radius:5px;padding:4px 10px;font-size:11px;color:#4a5044">${esc(ex.name)}</span>`).join('');
-        const notesRow = entry.notes ? `<div style="font-size:12px;color:#4a5044;border-top:1px solid #1a1f17;padding-top:10px;margin-top:10px;font-style:italic;line-height:1.6">${esc(entry.notes)}</div>` : '';
-        return `<div class="history-card" onclick="viewEntry(${entry.id})">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
-            <div><div style="font-family:'Bebas Neue',sans-serif;font-size:19px;color:#e8e4d9;line-height:1">${esc(entry.name)}</div><div style="font-size:12px;color:#4a5044;margin-top:3px">${entry.date}</div></div>
-            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">${entry.prs>0?`<span style="font-size:12px;color:#ff9f1c">🔥 ${entry.prs} PR</span>`:''}<span style="font-size:11px;color:#3a4035">~${estimateCal(entry.sets)} kcal</span><span style="font-size:10px;color:#3a4035;letter-spacing:.06em">VIEW ›</span></div>
-          </div>
-          <div style="display:flex;flex-wrap:wrap;gap:6px">
-            <span style="background:#0e120c;border:1px solid #1a1f17;border-radius:5px;padding:4px 10px;font-size:11px;color:#6b7565">${entry.exercises.length} exercises</span>
-            <span style="background:#0e120c;border:1px solid #1a1f17;border-radius:5px;padding:4px 10px;font-size:11px;color:#6b7565">${entry.sets} sets</span>
-            ${chips}
-          </div>${notesRow}
-        </div>`;
-      }).join('');
-
-  const lastBk = Store.lastBackup();
-  const bkDot  = lastBk ? '#a3e635' : '#ff9f1c';
-  const bkText = lastBk ? `Saved ${new Date(lastBk).toLocaleDateString()}` : 'Not yet saved';
-
+  const tSets=S.history.reduce((a,s)=>a+s.sets,0);
+  const tPRs=S.history.reduce((a,s)=>a+s.prs,0);
+  const tCals=S.history.reduce((a,s)=>a+estimateCal(s.sets),0);
+  const tiles=[
+    {label:'WORKOUTS',value:S.history.length,accent:'#a3e635'},
+    {label:'EST. CALORIES',value:tCals.toLocaleString(),accent:'#ff9f1c',sub:'kcal burned'},
+    {label:'TOTAL SETS',value:tSets,accent:'#6ee7b7'},
+    {label:'TOTAL PRs',value:tPRs,accent:'#ff6b2b'}
+  ].map(t=>`<div class="stat-tile"><div class="col-label" style="margin-bottom:6px">${t.label}</div><div style="font-family:'Bebas Neue',sans-serif;font-size:34px;color:${t.accent};line-height:1">${t.value}</div>${t.sub?`<div class="col-label" style="margin-top:3px">${t.sub}</div>`:''}</div>`).join('');
+  const cards=S.history.length===0
+    ?`<div class="empty-state"><div class="empty-icon">🏋️</div><div class="empty-text">No workouts logged yet</div></div>`
+    :S.history.map(entry=>{
+      const chips=entry.exercises.map(ex=>`<span style="background:#0e120c;border:1px solid #1a1f17;border-radius:5px;padding:4px 10px;font-size:11px;color:#4a5044">${esc(ex.name)}</span>`).join('');
+      const notesRow=entry.notes?`<div style="font-size:12px;color:#4a5044;border-top:1px solid #1a1f17;padding-top:10px;margin-top:10px;font-style:italic;line-height:1.6">${esc(entry.notes)}</div>`:'';
+      return `<div class="history-card" onclick="viewEntry(${entry.id})">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+          <div><div style="font-family:'Anton',sans-serif;font-size:19px;color:#e8e4d9;line-height:1">${esc(entry.name)}</div><div style="font-size:12px;color:#4a5044;margin-top:3px">${entry.date}</div></div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">${entry.prs>0?`<span style="font-size:12px;color:#ff9f1c">🔥 ${entry.prs} PR</span>`:''}<span style="font-size:11px;color:#3a4035">~${estimateCal(entry.sets)} kcal</span><span style="font-size:10px;color:#3a4035;letter-spacing:.06em">VIEW ›</span></div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          <span style="background:#0e120c;border:1px solid #1a1f17;border-radius:5px;padding:4px 10px;font-size:11px;color:#6b7565">${entry.exercises.length} exercises</span>
+          <span style="background:#0e120c;border:1px solid #1a1f17;border-radius:5px;padding:4px 10px;font-size:11px;color:#6b7565">${entry.sets} sets</span>
+          ${chips}
+        </div>${notesRow}
+      </div>`;
+    }).join('');
+  const lastBk=Store.lastBackup();
   return `
     <div class="grid-2" style="margin-bottom:22px">${tiles}</div>
     <div class="section-label">SESSION LOG</div>
     ${cards}
     <div style="margin-top:20px;background:#111410;border:1px solid #1e2319;border-radius:12px;padding:16px">
       <div class="section-label" style="margin-bottom:8px">DATA</div>
-      <div class="flex-row" style="margin-bottom:12px"><span style="width:6px;height:6px;border-radius:50%;background:${bkDot};display:inline-block;margin-right:5px"></span><span style="font-size:11px;color:#4a5044">${bkText}</span></div>
+      <div class="flex-row" style="margin-bottom:12px"><span style="width:6px;height:6px;border-radius:50%;background:${lastBk?'#a3e635':'#ff9f1c'};display:inline-block;margin-right:5px"></span><span style="font-size:11px;color:#4a5044">${lastBk?`Saved ${new Date(lastBk).toLocaleDateString()}`:'Not yet saved'}</span></div>
       <div class="flex-row">
         <button class="btn-ghost" style="flex:1;font-size:12px" onclick="exportData()">⬇ Export Backup</button>
         <button class="btn-ghost" style="flex:1;font-size:12px" onclick="triggerImport()">⬆ Import Backup</button>
@@ -368,46 +425,39 @@ function renderHistory() {
 
 // ── Render: Records Tab ───────────────────────────────────────
 function renderRecords() {
-  const allNames = [];
-  S.history.forEach(s => s.exercises.forEach(e => { if (e.name && !allNames.includes(e.name)) allNames.push(e.name); }));
-  if (!S.history.length) return `<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No records yet</div></div>`;
-
-  const sorted = [...S.history].sort((a,b) => new Date(a.date)-new Date(b.date));
-
-  const getRecs = (name) => {
-    const recs = [];
-    sorted.forEach(s => { const ex=s.exercises.find(e=>e.name===name); if(ex) recs.push({date:s.date,sets:ex.sets,hasPR:ex.sets.some(s=>s.pr),type:ex.type}); });
-    const prs = recs.filter(r=>r.hasPR).sort((a,b)=>new Date(b.date)-new Date(a.date));
-    return [...prs, ...recs.filter(r=>!r.hasPR)];
+  const allNames=[];
+  S.history.forEach(s=>s.exercises.forEach(e=>{if(e.name&&!allNames.includes(e.name))allNames.push(e.name);}));
+  if(!S.history.length) return`<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No records yet</div></div>`;
+  const sorted=[...S.history].sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const getRecs=name=>{
+    const recs=[];
+    sorted.forEach(s=>{const ex=s.exercises.find(e=>e.name===name);if(ex)recs.push({date:s.date,sets:ex.sets,hasPR:ex.sets.some(s=>s.pr),type:ex.type});});
+    const prs=recs.filter(r=>r.hasPR).sort((a,b)=>new Date(b.date)-new Date(a.date));
+    return [...prs,...recs.filter(r=>!r.hasPR)];
   };
-  const topStat = (rec) => {
-    if (rec.type==='Run') { const s=rec.sets[0]; return s?.distance?`${s.distance} ${s.unit}`:'—'; }
-    if (rec.type==='Cardio Intervals') return `${rec.sets.length} interval${rec.sets.length!==1?'s':''}`;
-    const t = rec.sets.reduce((mx,s)=>{ const w=parseFloat(s.weight)||0; return w>mx.w?{w,unit:s.unit}:mx; },{w:0,unit:'lbs'});
+  const topStat=rec=>{
+    if(rec.type==='Run'){const s=rec.sets[0];return s?.distance?`${s.distance} ${s.unit}`:'—';}
+    if(rec.type==='Cardio Intervals')return`${rec.sets.length} interval${rec.sets.length!==1?'s':''}`;
+    const t=rec.sets.reduce((mx,s)=>{const w=parseFloat(s.weight)||0;return w>mx.w?{w,unit:s.unit}:mx;},{w:0,unit:'lbs'});
     return t.w>0?`${t.w}`:'—';
   };
-  const topSub = (rec) => {
-    if (rec.type==='Run') { const s=rec.sets[0]; return s?.time||''; }
-    if (rec.type==='Cardio Intervals') return '';
-    const t = rec.sets.reduce((mx,s)=>{ const w=parseFloat(s.weight)||0; return w>mx.w?{w,unit:s.unit}:mx; },{w:0,unit:'lbs'});
+  const topSub=rec=>{
+    if(rec.type==='Run'){const s=rec.sets[0];return s?.time||'';}
+    if(rec.type==='Cardio Intervals')return'';
+    const t=rec.sets.reduce((mx,s)=>{const w=parseFloat(s.weight)||0;return w>mx.w?{w,unit:s.unit}:mx;},{w:0,unit:'lbs'});
     return t.w>0?t.unit.toUpperCase():'NO DATA';
   };
-  const fmtS = (s,type) => (type==='Run'||type==='Cardio Intervals') ? `${s.distance||'—'} ${s.unit} · ${s.time||'—'}` : `${s.reps||'—'} × ${s.weight||'—'} ${s.unit}`;
-
-  const sections = allNames.map(name => {
-    const recs = getRecs(name);
-    const hasPR = recs.some(r=>r.hasPR);
-    const cards = recs.map((rec,ri) => {
-      const key = `${name}-${ri}`;
-      const open = S.expanded[key];
-      const rl = rec.type==='Cardio Intervals'?'interval':'set';
-      const cls = rec.hasPR?'record-card pr-card':'record-card norm-card';
-      const bd  = rec.hasPR?'#2a1a08':'#181d15';
-      const detRows = open ? rec.sets.map((s,si) =>
-        `<div style="padding:7px 10px;border-bottom:${si<rec.sets.length-1?'1px solid #0f1210':'none'};display:flex;justify-content:space-between;align-items:center">
-          <div><div style="font-size:9px;color:#3a4035;letter-spacing:.06em">${rl.toUpperCase()} ${si+1}</div><div style="font-size:11px;color:#c8c4b9;margin-top:1px">${esc(fmtS(s,rec.type))}</div></div>
-          ${s.pr?PRB():''}
-        </div>`).join('') : '';
+  const fmtS=(s,type)=>(type==='Run'||type==='Cardio Intervals')?`${s.distance||'—'} ${s.unit} · ${s.time||'—'}`:`${s.reps||'—'} × ${s.weight||'—'} ${s.unit}`;
+  const sections=allNames.map(name=>{
+    const recs=getRecs(name);
+    const hasPR=recs.some(r=>r.hasPR);
+    const cards=recs.map((rec,ri)=>{
+      const key=`${name}-${ri}`;
+      const open=S.expanded[key];
+      const rl=rec.type==='Cardio Intervals'?'interval':'set';
+      const cls=rec.hasPR?'record-card pr-card':'record-card norm-card';
+      const bd=rec.hasPR?'#2a1a08':'#181d15';
+      const detRows=open?rec.sets.map((s,si)=>`<div style="padding:7px 10px;border-bottom:${si<rec.sets.length-1?'1px solid #0f1210':'none'};display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:9px;color:#3a4035;letter-spacing:.06em">${rl.toUpperCase()} ${si+1}</div><div style="font-size:11px;color:#c8c4b9;margin-top:1px">${esc(fmtS(s,rec.type))}</div></div>${s.pr?PRB():''}</div>`).join(''):'';
       return `<div class="${cls}">
         <div style="padding:8px 10px 6px;border-bottom:1px solid ${bd};display:flex;justify-content:space-between;align-items:center"><span style="font-size:10px;color:#4a5044">${fmtDate(rec.date)}</span>${rec.hasPR?PRB():''}</div>
         <div style="padding:10px 10px 8px"><div style="font-family:'Bebas Neue',sans-serif;font-size:24px;letter-spacing:.04em;color:${rec.hasPR?'#ff9f1c':'#e8e4d9'};line-height:1">${esc(topStat(rec))}</div><div style="font-size:9px;color:#3a4035;letter-spacing:.1em;margin-top:2px">${esc(topSub(rec))}</div></div>
@@ -420,25 +470,22 @@ function renderRecords() {
       <div class="records-scroll"><div class="records-row">${cards}</div></div>
     </div>`;
   }).join('');
-
-  return `<div style="font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:.1em;color:#3a4035;margin-bottom:20px">${allNames.length} EXERCISE${allNames.length!==1?'S':''} TRACKED</div>${sections}`;
+  return`<div style="font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:.1em;color:#3a4035;margin-bottom:20px">${allNames.length} EXERCISE${allNames.length!==1?'S':''} TRACKED</div>${sections}`;
 }
 
 // ── Main Render ───────────────────────────────────────────────
 function render() {
-  const backBtn = S.viewingEntry
-    ? `<button class="btn-ghost" style="font-size:12px;padding:8px 14px" onclick="setState({viewingEntry:null,view:'history'})">← HISTORY</button>` : '';
-  let content = '';
-  if (S.view==='log')     content = renderLog();
-  if (S.view==='history') content = renderHistory();
-  if (S.view==='records') content = renderRecords();
-  const nav = ['log','history','records'].map((id,i) => {
-    const icons  = ['✏️','📅','📊'];
-    const labels = ['LOG','HISTORY','RECORDS'];
-    const active = S.view===id && !S.viewingEntry;
-    return `<button class="nav-btn ${active?'active':''}" onclick="setView('${id}')"><span class="nav-icon">${icons[i]}</span><span class="nav-label">${labels[i]}</span>${active?'<div class="nav-dot"></div>':''}</button>`;
+  const backBtn=S.viewingEntry?`<button class="btn-ghost" style="font-size:12px;padding:8px 14px" onclick="S.viewingEntry=null;S.view='history';render()">← HISTORY</button>`:'';
+  let content='';
+  if(S.view==='log')     content=renderLog();
+  if(S.view==='history') content=renderHistory();
+  if(S.view==='records') content=renderRecords();
+  const nav=['log','history','records'].map((id,i)=>{
+    const icons=['✏️','📅','📊'], labels=['LOG','HISTORY','RECORDS'];
+    const active=S.view===id&&!S.viewingEntry;
+    return`<button class="nav-btn ${active?'active':''}" onclick="setView('${id}')"><span class="nav-icon">${icons[i]}</span><span class="nav-label">${labels[i]}</span>${active?'<div class="nav-dot"></div>':''}</button>`;
   }).join('');
-  document.getElementById('app').innerHTML = `
+  document.getElementById('app').innerHTML=`
     <div class="header">
       <div><div style="font-family:'Anton',sans-serif;font-size:26px;letter-spacing:.06em;color:#a3e635;line-height:1">iWORKOUT</div><div style="font-size:9px;color:#3a4035;letter-spacing:.15em">WORKOUT TRACKER</div></div>
       ${backBtn}
@@ -454,8 +501,8 @@ function render() {
 // ── Boot ──────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
   S.history = Store.load();
-  document.getElementById('loading').style.display = 'none';
-  document.getElementById('app').style.display = 'block';
+  document.getElementById('loading').style.display='none';
+  document.getElementById('app').style.display='block';
   render();
 });
 </script>
